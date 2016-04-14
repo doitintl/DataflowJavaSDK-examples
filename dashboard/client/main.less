@@ -1,0 +1,29 @@
+@import "../bower_components/more-of-less/flex";
+
+body {
+  font-size: 16px;
+  .app {
+    .fx-row(@justify: center);
+    .col {
+      .fx-item();
+      .fx-col(@justify: flex-start);
+      margin: 1em 5em;
+      .title {
+        margin: 1em;
+      }
+
+      .item {
+        .fx-item();
+        .fx-row();
+        .key {
+          margin:0.2em 1em;
+        }
+        .value {
+
+
+          margin:0.2em 1em;
+        }
+      }
+    }
+  }
+}

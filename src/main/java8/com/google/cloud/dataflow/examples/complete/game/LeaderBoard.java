@@ -197,7 +197,7 @@ public class LeaderBoard extends HourlyTeamScore {
 
         // [START DocInclude_WindowAndTrigger]
         // Extract team/score pairs from the event stream, using hour-long windows by default.
-        gameEvents
+        PCollection<KV<String, Integer>> teams = gameEvents
                 .apply(Window.named("LeaderboardTeamFixedWindows")
                         .<GameActionInfo>into(FixedWindows.of(
                                 Duration.standardMinutes(options.getTeamWindowDuration())))
@@ -212,30 +212,23 @@ public class LeaderBoard extends HourlyTeamScore {
                         .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness()))
                         .accumulatingFiredPanes())
                 // Extract and sum teamname/score pairs from the event data.
-                .apply("ExtractTeamScore", new ExtractAndSumScore("team"))
-/*
-                .apply(ParDo.named("Write to FireBase").of(new DoFn<KV<String, Integer>, KV<String, Integer>>() {
-                    @Override
-                    public void processElement(ProcessContext c) throws Exception {
-                        String team=c.element().getKey();
-                        Integer score=c.element().getValue();
-                        HttpRequestWithBody request = Unirest.put("https://dazzling-heat-5309.firebaseio.com/team_"+team+".json");
-                        request.body(score.toString());
-                        request.asString();
-                        c.output(c.element());
-                    }
-                }))
-*/
-                // Write the results to BigQuery.
-                .apply("WriteTeamScoreSums",
-                        new WriteWindowedToBigQuery<KV<String, Integer>>(
-                                options.getTableName() + "_team", configureWindowedTableWrite()));
+                .apply("ExtractTeamScore", new ExtractAndSumScore("team"));
+        // Write the results to PubSub.
+        teams.apply(ParDo.named("ConvertToString").of(new DoFn<KV<String,Integer>, String>() {
+            @Override
+            public void processElement(ProcessContext c) throws Exception {
+                c.output("{\"name\":\""+c.element().getKey()+"\", \"value\": "+c.element().getValue()+"}");
+            }
+        })).apply("WriteTeamScoreSumsToPubSub", PubsubIO.Write.named("WriteTeamScoreSumsToPubSub").topic("projects/df-demo/topics/teams"));
+        teams.apply("WriteTeamScoreSums",
+                new WriteWindowedToBigQuery<KV<String, Integer>>(
+                        options.getTableName() + "_team", configureWindowedTableWrite()));
         // [END DocInclude_WindowAndTrigger]
 
         // [START DocInclude_ProcTimeTrigger]
         // Extract user/score pairs from the event stream using processing time, via global windowing.
         // Get periodic updates on all users' running scores.
-        gameEvents
+        PCollection<KV<String, Integer>> users = gameEvents
                 .apply(Window.named("LeaderboardUserGlobalWindow")
                         .<GameActionInfo>into(new GlobalWindows())
                         // Get periodic results every ten minutes.
@@ -244,24 +237,18 @@ public class LeaderBoard extends HourlyTeamScore {
                         .accumulatingFiredPanes()
                         .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness())))
                 // Extract and sum username/score pairs from the event data.
-                .apply("ExtractUserScore", new ExtractAndSumScore("user"))
-/*
-                .apply(ParDo.named("Write to FireBase").of(new DoFn<KV<String, Integer>, KV<String, Integer>>() {
-                    @Override
-                    public void processElement(ProcessContext c) throws Exception {
-                        String user=c.element().getKey();
-                        Integer score=c.element().getValue();
-                        HttpRequestWithBody request = Unirest.put("https://dazzling-heat-5309.firebaseio.com/user_"+user+".json");
-                        request.body(score.toString());
-                        request.asString();
-                        c.output(c.element());
-                    }
-                }))
-*/
-                // Write the results to BigQuery.
-                .apply("WriteUserScoreSums",
-                        new WriteToBigQuery<KV<String, Integer>>(
-                                options.getTableName() + "_user", configureGlobalWindowBigQueryWrite()));
+                .apply("ExtractUserScore", new ExtractAndSumScore("user"));
+        // Write the results to PubSub.
+        users.apply(ParDo.named("ConvertToString").of(new DoFn<KV<String,Integer>, String>() {
+            @Override
+            public void processElement(ProcessContext c) throws Exception {
+                c.output("{\"name\":\""+c.element().getKey()+"\", \"value\": "+c.element().getValue()+"}");
+            }
+        })).apply("WriteUserScoreSumsToPubSub", PubsubIO.Write.named("WriteUserScoreSumsToPubSub").topic("projects/df-demo/topics/users"));
+        // Write the results to BigQuery.
+        users.apply("WriteUserScoreSums",
+                new WriteToBigQuery<KV<String, Integer>>(
+                        options.getTableName() + "_user", configureGlobalWindowBigQueryWrite()));
         // [END DocInclude_ProcTimeTrigger]
 
         // Run the pipeline and wait for the pipeline to finish; capture cancellation requests from the

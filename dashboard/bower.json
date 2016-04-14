@@ -1,0 +1,21 @@
+{
+  "name": "dashboard",
+  "homepage": "https://github.com/doitintl/DataflowJavaSDK-examples",
+  "authors": [
+    "shahar <shahar@budgetao.com>"
+  ],
+  "description": "",
+  "main": "",
+  "license": "MIT",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "test",
+    "tests"
+  ],
+  "dependencies": {
+    "angular": "^1.5.4",
+    "more-of-less": "*"
+  }
+}

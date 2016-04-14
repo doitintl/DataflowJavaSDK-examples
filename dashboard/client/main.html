@@ -1,10 +1,33 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" ng-app="dashboard">
 <head>
     <meta charset="UTF-8">
-    <title>Title</title>
+    <title>DataFlow Dashboard</title>
+    <link rel="stylesheet" type="text/css" href="main.css">
+    <script type="application/javascript" src="l/angular/angular.js"></script>
+    <script type="application/javascript" src="main.js"></script>
 </head>
-<body>
+<body ng-controller="main">
+<div class="app">
+    <div class="teams col">
+        <div class="title">Teams</div>
+        <div class="list">
+            <div class="item" ng-repeat="team in teams">
+                <div class="key">{{team.key}}</div>
+                <div class="value">{{team.value}}</div>
+            </div>
+        </div>
+    </div>
+    <div class="users col">
+        <div class="title">Users</div>
+        <div class="list">
+            <div class="item" ng-repeat="user in users">
+                <div class="key">{{user.key}}</div>
+                <div class="value">{{user.value}}</div>
+            </div>
+        </div>
+    </div>
+</div>
 
 </body>
 </html>
