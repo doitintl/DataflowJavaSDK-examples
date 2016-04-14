@@ -28,6 +28,7 @@ import com.google.cloud.dataflow.sdk.options.Description;
 import com.google.cloud.dataflow.sdk.options.PipelineOptionsFactory;
 import com.google.cloud.dataflow.sdk.options.Validation;
 import com.google.cloud.dataflow.sdk.runners.DataflowPipelineRunner;
+import com.google.cloud.dataflow.sdk.transforms.DoFn;
 import com.google.cloud.dataflow.sdk.transforms.ParDo;
 import com.google.cloud.dataflow.sdk.transforms.windowing.AfterProcessingTime;
 import com.google.cloud.dataflow.sdk.transforms.windowing.AfterWatermark;
@@ -39,6 +40,8 @@ import com.google.cloud.dataflow.sdk.transforms.windowing.Window;
 import com.google.cloud.dataflow.sdk.values.KV;
 import com.google.cloud.dataflow.sdk.values.PCollection;
 
+import com.mashape.unirest.http.Unirest;
+import com.mashape.unirest.request.HttpRequestWithBody;
 import org.joda.time.DateTimeZone;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
@@ -55,26 +58,26 @@ import java.util.TimeZone;
  * data using fixed windows; use of custom timestamps and event-time processing; generation of
  * early/speculative results; using .accumulatingFiredPanes() to do cumulative processing of late-
  * arriving data.
- *
+ * <p>
  * <p> This pipeline processes an unbounded stream of 'game events'. The calculation of the team
  * scores uses fixed windowing based on event time (the time of the game play event), not
  * processing time (the time that an event is processed by the pipeline). The pipeline calculates
  * the sum of scores per team, for each window. By default, the team scores are calculated using
  * one-hour windows.
- *
+ * <p>
  * <p> In contrast-- to demo another windowing option-- the user scores are calculated using a
  * global window, which periodically (every ten minutes) emits cumulative user score sums.
- *
+ * <p>
  * <p> In contrast to the previous pipelines in the series, which used static, finite input data,
  * here we're using an unbounded data source, which lets us provide speculative results, and allows
  * handling of late data, at much lower latency. We can use the early/speculative results to keep a
  * 'leaderboard' updated in near-realtime. Our handling of late data lets us generate correct
  * results, e.g. for 'team prizes'. We're now outputing window results as they're
  * calculated, giving us much lower latency than with the previous batch examples.
- *
+ * <p>
  * <p> Run {@link injector.Injector} to generate pubsub data for this pipeline.  The Injector
  * documentation provides more detail on how to do this.
- *
+ * <p>
  * <p> To execute this pipeline using the Dataflow service, specify the pipeline configuration
  * like this:
  * <pre>{@code
@@ -90,148 +93,180 @@ import java.util.TimeZone;
  */
 public class LeaderBoard extends HourlyTeamScore {
 
-  private static final String TIMESTAMP_ATTRIBUTE = "timestamp_ms";
+    private static final String TIMESTAMP_ATTRIBUTE = "timestamp_ms";
 
-  private static DateTimeFormatter fmt =
-      DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSS")
-          .withZone(DateTimeZone.forTimeZone(TimeZone.getTimeZone("PST")));
-  static final Duration FIVE_MINUTES = Duration.standardMinutes(5);
-  static final Duration TEN_MINUTES = Duration.standardMinutes(10);
-
-
-  /**
-   * Options supported by {@link LeaderBoard}.
-   */
-  static interface Options extends HourlyTeamScore.Options, DataflowExampleOptions {
-
-    @Description("Pub/Sub topic to read from")
-    @Validation.Required
-    String getTopic();
-    void setTopic(String value);
-
-    @Description("Numeric value of fixed window duration for team analysis, in minutes")
-    @Default.Integer(60)
-    Integer getTeamWindowDuration();
-    void setTeamWindowDuration(Integer value);
-
-    @Description("Numeric value of allowed data lateness, in minutes")
-    @Default.Integer(120)
-    Integer getAllowedLateness();
-    void setAllowedLateness(Integer value);
-
-    @Description("Prefix used for the BigQuery table names")
-    @Default.String("leaderboard")
-    String getTableName();
-    void setTableName(String value);
-  }
-
-  /**
-   * Create a map of information that describes how to write pipeline output to BigQuery. This map
-   * is used to write team score sums and includes event timing information.
-   */
-  protected static Map<String, WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>>
-      configureWindowedTableWrite() {
-
-    Map<String, WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>> tableConfigure =
-        new HashMap<String, WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>>();
-    tableConfigure.put("team",
-        new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>("STRING",
-            c -> c.element().getKey()));
-    tableConfigure.put("total_score",
-        new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>("INTEGER",
-            c -> c.element().getValue()));
-    tableConfigure.put("window_start",
-        new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>("STRING",
-          c -> { IntervalWindow w = (IntervalWindow) c.window();
-                 return fmt.print(w.start()); }));
-    tableConfigure.put("processing_time",
-        new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>(
-            "STRING", c -> fmt.print(Instant.now())));
-    tableConfigure.put("timing",
-        new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>(
-            "STRING", c -> c.pane().getTiming().toString()));
-    return tableConfigure;
-  }
-
-  /**
-   * Create a map of information that describes how to write pipeline output to BigQuery. This map
-   * is used to write user score sums.
-   */
-  protected static Map<String, WriteToBigQuery.FieldInfo<KV<String, Integer>>>
-      configureGlobalWindowBigQueryWrite() {
-
-    Map<String, WriteToBigQuery.FieldInfo<KV<String, Integer>>> tableConfigure =
-        configureBigQueryWrite();
-    tableConfigure.put("processing_time",
-        new WriteToBigQuery.FieldInfo<KV<String, Integer>>(
-            "STRING", c -> fmt.print(Instant.now())));
-    return tableConfigure;
-  }
+    private static DateTimeFormatter fmt =
+            DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSS")
+                    .withZone(DateTimeZone.forTimeZone(TimeZone.getTimeZone("PST")));
+    static final Duration FIVE_MINUTES = Duration.standardMinutes(5);
+    static final Duration TEN_MINUTES = Duration.standardMinutes(10);
 
 
-  public static void main(String[] args) throws Exception {
+    /**
+     * Options supported by {@link LeaderBoard}.
+     */
+    static interface Options extends HourlyTeamScore.Options, DataflowExampleOptions {
 
-    Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
-    // Enforce that this pipeline is always run in streaming mode.
-    options.setStreaming(true);
-    // For example purposes, allow the pipeline to be easily cancelled instead of running
-    // continuously.
-    options.setRunner(DataflowPipelineRunner.class);
-    DataflowExampleUtils dataflowUtils = new DataflowExampleUtils(options);
-    Pipeline pipeline = Pipeline.create(options);
+        @Description("Pub/Sub topic to read from")
+        @Validation.Required
+        String getTopic();
 
-    // Read game events from Pub/Sub using custom timestamps, which are extracted from the pubsub
-    // data elements, and parse the data.
-    PCollection<GameActionInfo> gameEvents = pipeline
-        .apply(PubsubIO.Read.timestampLabel(TIMESTAMP_ATTRIBUTE).topic(options.getTopic()))
-        .apply(ParDo.named("ParseGameEvent").of(new ParseEventFn()));
+        void setTopic(String value);
 
-    // [START DocInclude_WindowAndTrigger]
-    // Extract team/score pairs from the event stream, using hour-long windows by default.
-    gameEvents
-        .apply(Window.named("LeaderboardTeamFixedWindows")
-          .<GameActionInfo>into(FixedWindows.of(
-              Duration.standardMinutes(options.getTeamWindowDuration())))
-          // We will get early (speculative) results as well as cumulative
-          // processing of late data.
-          .triggering(
-            AfterWatermark.pastEndOfWindow()
-            .withEarlyFirings(AfterProcessingTime.pastFirstElementInPane()
-                  .plusDelayOf(FIVE_MINUTES))
-            .withLateFirings(AfterProcessingTime.pastFirstElementInPane()
-                  .plusDelayOf(TEN_MINUTES)))
-          .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness()))
-          .accumulatingFiredPanes())
-        // Extract and sum teamname/score pairs from the event data.
-        .apply("ExtractTeamScore", new ExtractAndSumScore("team"))
-        // Write the results to BigQuery.
-        .apply("WriteTeamScoreSums",
-               new WriteWindowedToBigQuery<KV<String, Integer>>(
-                  options.getTableName() + "_team", configureWindowedTableWrite()));
-    // [END DocInclude_WindowAndTrigger]
+        @Description("Numeric value of fixed window duration for team analysis, in minutes")
+        @Default.Integer(60)
+        Integer getTeamWindowDuration();
 
-    // [START DocInclude_ProcTimeTrigger]
-    // Extract user/score pairs from the event stream using processing time, via global windowing.
-    // Get periodic updates on all users' running scores.
-    gameEvents
-        .apply(Window.named("LeaderboardUserGlobalWindow")
-          .<GameActionInfo>into(new GlobalWindows())
-          // Get periodic results every ten minutes.
-              .triggering(Repeatedly.forever(AfterProcessingTime.pastFirstElementInPane()
-                  .plusDelayOf(TEN_MINUTES)))
-              .accumulatingFiredPanes()
-              .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness())))
-        // Extract and sum username/score pairs from the event data.
-        .apply("ExtractUserScore", new ExtractAndSumScore("user"))
-        // Write the results to BigQuery.
-        .apply("WriteUserScoreSums",
-               new WriteToBigQuery<KV<String, Integer>>(
-                  options.getTableName() + "_user", configureGlobalWindowBigQueryWrite()));
-    // [END DocInclude_ProcTimeTrigger]
+        void setTeamWindowDuration(Integer value);
 
-    // Run the pipeline and wait for the pipeline to finish; capture cancellation requests from the
-    // command line.
-    PipelineResult result = pipeline.run();
-    dataflowUtils.waitToFinish(result);
-  }
+        @Description("Numeric value of allowed data lateness, in minutes")
+        @Default.Integer(120)
+        Integer getAllowedLateness();
+
+        void setAllowedLateness(Integer value);
+
+        @Description("Prefix used for the BigQuery table names")
+        @Default.String("leaderboard")
+        String getTableName();
+
+        void setTableName(String value);
+    }
+
+    /**
+     * Create a map of information that describes how to write pipeline output to BigQuery. This map
+     * is used to write team score sums and includes event timing information.
+     */
+    protected static Map<String, WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>>
+    configureWindowedTableWrite() {
+
+        Map<String, WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>> tableConfigure =
+                new HashMap<String, WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>>();
+        tableConfigure.put("team",
+                new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>("STRING",
+                        c -> c.element().getKey()));
+        tableConfigure.put("total_score",
+                new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>("INTEGER",
+                        c -> c.element().getValue()));
+        tableConfigure.put("window_start",
+                new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>("STRING",
+                        c -> {
+                            IntervalWindow w = (IntervalWindow) c.window();
+                            return fmt.print(w.start());
+                        }));
+        tableConfigure.put("processing_time",
+                new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>(
+                        "STRING", c -> fmt.print(Instant.now())));
+        tableConfigure.put("timing",
+                new WriteWindowedToBigQuery.FieldInfo<KV<String, Integer>>(
+                        "STRING", c -> c.pane().getTiming().toString()));
+        return tableConfigure;
+    }
+
+    /**
+     * Create a map of information that describes how to write pipeline output to BigQuery. This map
+     * is used to write user score sums.
+     */
+    protected static Map<String, WriteToBigQuery.FieldInfo<KV<String, Integer>>>
+    configureGlobalWindowBigQueryWrite() {
+
+        Map<String, WriteToBigQuery.FieldInfo<KV<String, Integer>>> tableConfigure =
+                configureBigQueryWrite();
+        tableConfigure.put("processing_time",
+                new WriteToBigQuery.FieldInfo<KV<String, Integer>>(
+                        "STRING", c -> fmt.print(Instant.now())));
+        return tableConfigure;
+    }
+
+
+    public static void main(String[] args) throws Exception {
+
+        Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
+        // Enforce that this pipeline is always run in streaming mode.
+        options.setStreaming(true);
+        // For example purposes, allow the pipeline to be easily cancelled instead of running
+        // continuously.
+        options.setRunner(DataflowPipelineRunner.class);
+        DataflowExampleUtils dataflowUtils = new DataflowExampleUtils(options);
+        Pipeline pipeline = Pipeline.create(options);
+
+        // Read game events from Pub/Sub using custom timestamps, which are extracted from the pubsub
+        // data elements, and parse the data.
+        PCollection<GameActionInfo> gameEvents = pipeline
+                .apply(PubsubIO.Read.timestampLabel(TIMESTAMP_ATTRIBUTE).topic(options.getTopic()))
+                .apply(ParDo.named("ParseGameEvent").of(new ParseEventFn()));
+
+        // [START DocInclude_WindowAndTrigger]
+        // Extract team/score pairs from the event stream, using hour-long windows by default.
+        gameEvents
+                .apply(Window.named("LeaderboardTeamFixedWindows")
+                        .<GameActionInfo>into(FixedWindows.of(
+                                Duration.standardMinutes(options.getTeamWindowDuration())))
+                        // We will get early (speculative) results as well as cumulative
+                        // processing of late data.
+                        .triggering(
+                                AfterWatermark.pastEndOfWindow()
+                                        .withEarlyFirings(AfterProcessingTime.pastFirstElementInPane()
+                                                .plusDelayOf(FIVE_MINUTES))
+                                        .withLateFirings(AfterProcessingTime.pastFirstElementInPane()
+                                                .plusDelayOf(TEN_MINUTES)))
+                        .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness()))
+                        .accumulatingFiredPanes())
+                // Extract and sum teamname/score pairs from the event data.
+                .apply("ExtractTeamScore", new ExtractAndSumScore("team"))
+/*
+                .apply(ParDo.named("Write to FireBase").of(new DoFn<KV<String, Integer>, KV<String, Integer>>() {
+                    @Override
+                    public void processElement(ProcessContext c) throws Exception {
+                        String team=c.element().getKey();
+                        Integer score=c.element().getValue();
+                        HttpRequestWithBody request = Unirest.put("https://dazzling-heat-5309.firebaseio.com/team_"+team+".json");
+                        request.body(score.toString());
+                        request.asString();
+                        c.output(c.element());
+                    }
+                }))
+*/
+                // Write the results to BigQuery.
+                .apply("WriteTeamScoreSums",
+                        new WriteWindowedToBigQuery<KV<String, Integer>>(
+                                options.getTableName() + "_team", configureWindowedTableWrite()));
+        // [END DocInclude_WindowAndTrigger]
+
+        // [START DocInclude_ProcTimeTrigger]
+        // Extract user/score pairs from the event stream using processing time, via global windowing.
+        // Get periodic updates on all users' running scores.
+        gameEvents
+                .apply(Window.named("LeaderboardUserGlobalWindow")
+                        .<GameActionInfo>into(new GlobalWindows())
+                        // Get periodic results every ten minutes.
+                        .triggering(Repeatedly.forever(AfterProcessingTime.pastFirstElementInPane()
+                                .plusDelayOf(TEN_MINUTES)))
+                        .accumulatingFiredPanes()
+                        .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness())))
+                // Extract and sum username/score pairs from the event data.
+                .apply("ExtractUserScore", new ExtractAndSumScore("user"))
+/*
+                .apply(ParDo.named("Write to FireBase").of(new DoFn<KV<String, Integer>, KV<String, Integer>>() {
+                    @Override
+                    public void processElement(ProcessContext c) throws Exception {
+                        String user=c.element().getKey();
+                        Integer score=c.element().getValue();
+                        HttpRequestWithBody request = Unirest.put("https://dazzling-heat-5309.firebaseio.com/user_"+user+".json");
+                        request.body(score.toString());
+                        request.asString();
+                        c.output(c.element());
+                    }
+                }))
+*/
+                // Write the results to BigQuery.
+                .apply("WriteUserScoreSums",
+                        new WriteToBigQuery<KV<String, Integer>>(
+                                options.getTableName() + "_user", configureGlobalWindowBigQueryWrite()));
+        // [END DocInclude_ProcTimeTrigger]
+
+        // Run the pipeline and wait for the pipeline to finish; capture cancellation requests from the
+        // command line.
+        PipelineResult result = pipeline.run();
+        //dataflowUtils.waitToFinish(result);
+    }
 }
