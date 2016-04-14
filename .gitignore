@@ -15,3 +15,5 @@ target/
 # committed.
 dependency-reduced-pom.xml
 *.css
+
+bower_components
