@@ -33,7 +33,7 @@ angular.module('dashboard', [])
             },
             link: function (scope, elm, attrs, ctrl) {
                 scope.$watch('value', function () {
-                    $(elm).css({backgroundColor: 'red'});
+                    $(elm).css({backgroundColor: '#FFEB3B'});
                     $(elm).stop().animate({
                         backgroundColor: 'none'
                     }, 1000);

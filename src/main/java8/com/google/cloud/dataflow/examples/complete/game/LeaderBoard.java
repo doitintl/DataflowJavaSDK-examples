@@ -206,9 +206,9 @@ public class LeaderBoard extends HourlyTeamScore {
                         .triggering(
                                 AfterWatermark.pastEndOfWindow()
                                         .withEarlyFirings(AfterProcessingTime.pastFirstElementInPane()
-                                                .plusDelayOf(Duration.ZERO))
+                                                .plusDelayOf(Duration.standardSeconds(1)))
                                         .withLateFirings(AfterProcessingTime.pastFirstElementInPane()
-                                                .plusDelayOf(Duration.ZERO)))
+                                                .plusDelayOf(Duration.standardSeconds(1))))
                         .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness()))
                         .accumulatingFiredPanes())
                 // Extract and sum teamname/score pairs from the event data.
@@ -249,7 +249,7 @@ public class LeaderBoard extends HourlyTeamScore {
                         .<GameActionInfo>into(new GlobalWindows())
                         // Get periodic results every ten minutes.
                         .triggering(Repeatedly.forever(AfterProcessingTime.pastFirstElementInPane()
-                                .plusDelayOf(Duration.ZERO)))
+                                .plusDelayOf(Duration.standardSeconds(1))))
                         .accumulatingFiredPanes()
                         .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness())))
                 // Extract and sum username/score pairs from the event data.
