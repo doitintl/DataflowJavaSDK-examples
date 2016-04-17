@@ -197,7 +197,29 @@ public class LeaderBoard extends HourlyTeamScore {
 
         // [START DocInclude_WindowAndTrigger]
         // Extract team/score pairs from the event stream, using hour-long windows by default.
-        PCollection<KV<String, Integer>> teams = gameEvents
+        gameEvents
+                .apply(Window.named("LeaderboardTeamFixedWindows")
+                        .<GameActionInfo>into(FixedWindows.of(
+                                Duration.standardMinutes(options.getTeamWindowDuration())))
+                        // We will get early (speculative) results as well as cumulative
+                        // processing of late data.
+                        .triggering(
+                                AfterWatermark.pastEndOfWindow()
+                                        .withEarlyFirings(AfterProcessingTime.pastFirstElementInPane()
+                                                .plusDelayOf(Duration.ZERO))
+                                        .withLateFirings(AfterProcessingTime.pastFirstElementInPane()
+                                                .plusDelayOf(Duration.ZERO)))
+                        .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness()))
+                        .accumulatingFiredPanes())
+                // Extract and sum teamname/score pairs from the event data.
+                .apply("ExtractTeamScore", new ExtractAndSumScore("team"))
+                .apply(ParDo.named("ConvertToString").of(new DoFn<KV<String, Integer>, String>() {
+                    @Override
+                    public void processElement(ProcessContext c) throws Exception {
+                        c.output("{\"name\":\"" + c.element().getKey() + "\", \"value\": " + c.element().getValue() + "}");
+                    }
+                })).apply("WriteTeamScoreSumsToPubSub", PubsubIO.Write.named("WriteTeamScoreSumsToPubSub").topic("projects/df-demo/topics/teams"));
+        gameEvents
                 .apply(Window.named("LeaderboardTeamFixedWindows")
                         .<GameActionInfo>into(FixedWindows.of(
                                 Duration.standardMinutes(options.getTeamWindowDuration())))
@@ -212,23 +234,32 @@ public class LeaderBoard extends HourlyTeamScore {
                         .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness()))
                         .accumulatingFiredPanes())
                 // Extract and sum teamname/score pairs from the event data.
-                .apply("ExtractTeamScore", new ExtractAndSumScore("team"));
+                .apply("ExtractTeamScore", new ExtractAndSumScore("team")).
+                apply("WriteTeamScoreSums",
+                        new WriteWindowedToBigQuery<KV<String, Integer>>(options.getTableName() + "_team", configureWindowedTableWrite()));
         // Write the results to PubSub.
-        teams.apply(ParDo.named("ConvertToString").of(new DoFn<KV<String,Integer>, String>() {
-            @Override
-            public void processElement(ProcessContext c) throws Exception {
-                c.output("{\"name\":\""+c.element().getKey()+"\", \"value\": "+c.element().getValue()+"}");
-            }
-        })).apply("WriteTeamScoreSumsToPubSub", PubsubIO.Write.named("WriteTeamScoreSumsToPubSub").topic("projects/df-demo/topics/teams"));
-        teams.apply("WriteTeamScoreSums",
-                new WriteWindowedToBigQuery<KV<String, Integer>>(
-                        options.getTableName() + "_team", configureWindowedTableWrite()));
+
         // [END DocInclude_WindowAndTrigger]
 
         // [START DocInclude_ProcTimeTrigger]
         // Extract user/score pairs from the event stream using processing time, via global windowing.
         // Get periodic updates on all users' running scores.
-        PCollection<KV<String, Integer>> users = gameEvents
+        gameEvents
+                .apply(Window.named("LeaderboardUserGlobalWindow")
+                        .<GameActionInfo>into(new GlobalWindows())
+                        // Get periodic results every ten minutes.
+                        .triggering(Repeatedly.forever(AfterProcessingTime.pastFirstElementInPane()
+                                .plusDelayOf(Duration.ZERO)))
+                        .accumulatingFiredPanes()
+                        .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness())))
+                // Extract and sum username/score pairs from the event data.
+                .apply("ExtractUserScore", new ExtractAndSumScore("user")).apply(ParDo.named("ConvertToString").of(new DoFn<KV<String, Integer>, String>() {
+            @Override
+            public void processElement(ProcessContext c) throws Exception {
+                c.output("{\"name\":\"" + c.element().getKey() + "\", \"value\": " + c.element().getValue() + "}");
+            }
+        })).apply("WriteUserScoreSumsToPubSub", PubsubIO.Write.named("WriteUserScoreSumsToPubSub").topic("projects/df-demo/topics/users"));
+        gameEvents
                 .apply(Window.named("LeaderboardUserGlobalWindow")
                         .<GameActionInfo>into(new GlobalWindows())
                         // Get periodic results every ten minutes.
@@ -237,18 +268,13 @@ public class LeaderBoard extends HourlyTeamScore {
                         .accumulatingFiredPanes()
                         .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness())))
                 // Extract and sum username/score pairs from the event data.
-                .apply("ExtractUserScore", new ExtractAndSumScore("user"));
-        // Write the results to PubSub.
-        users.apply(ParDo.named("ConvertToString").of(new DoFn<KV<String,Integer>, String>() {
-            @Override
-            public void processElement(ProcessContext c) throws Exception {
-                c.output("{\"name\":\""+c.element().getKey()+"\", \"value\": "+c.element().getValue()+"}");
-            }
-        })).apply("WriteUserScoreSumsToPubSub", PubsubIO.Write.named("WriteUserScoreSumsToPubSub").topic("projects/df-demo/topics/users"));
-        // Write the results to BigQuery.
-        users.apply("WriteUserScoreSums",
+                .apply("ExtractUserScore", new ExtractAndSumScore("user")).apply("WriteUserScoreSums",
                 new WriteToBigQuery<KV<String, Integer>>(
                         options.getTableName() + "_user", configureGlobalWindowBigQueryWrite()));
+        // Write the results to PubSub.
+
+        // Write the results to BigQuery.
+
         // [END DocInclude_ProcTimeTrigger]
 
         // Run the pipeline and wait for the pipeline to finish; capture cancellation requests from the

@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <title>DataFlow Dashboard</title>
     <link rel="stylesheet" type="text/css" href="main.css">
+    <script type="application/javascript" src="l/jquery/dist/jquery.js"></script>
+    <script type="application/javascript" src="l/jquery-color/jquery.color.js"></script>
     <script type="application/javascript" src="l/angular/angular.js"></script>
     <script type="application/javascript" src="main.js"></script>
 </head>
@@ -12,22 +14,21 @@
     <div class="teams col">
         <div class="title">Teams</div>
         <div class="list">
-            <div class="item" ng-repeat="team in teams">
+            <div class="item" ng-repeat="team in teams | orderBy:'-value' track by team.key" >
                 <div class="key">{{team.key}}</div>
-                <div class="value">{{team.value}}</div>
+                <div class="value" highlight-changes value="team.value">{{team.value}}</div>
             </div>
         </div>
     </div>
     <div class="users col">
         <div class="title">Users</div>
         <div class="list">
-            <div class="item" ng-repeat="user in users">
+            <div class="item" ng-repeat="user in users | orderBy:'-value' track by user.key">
                 <div class="key">{{user.key}}</div>
-                <div class="value">{{user.value}}</div>
+                <div class="value" highlight-changes value="user.value">{{user.value}}</div>
             </div>
         </div>
     </div>
 </div>
-
 </body>
 </html>

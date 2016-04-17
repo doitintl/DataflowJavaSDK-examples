@@ -21,8 +21,23 @@ angular.module('dashboard', [])
                 $scope.users = response.data;
             }, function errorCallback(response) {
             });
-            $timeout($scope.update,1000);
+            $timeout($scope.update, 100);
         };
 
         $scope.update();
-    }]);
+    }])
+    .directive('highlightChanges', function () {
+        return {
+            scope: {
+                value: '='
+            },
+            link: function (scope, elm, attrs, ctrl) {
+                scope.$watch('value', function () {
+                    $(elm).css({backgroundColor: 'red'});
+                    $(elm).stop().animate({
+                        backgroundColor: 'none'
+                    }, 1000);
+                }, true);
+            }
+        };
+    });
