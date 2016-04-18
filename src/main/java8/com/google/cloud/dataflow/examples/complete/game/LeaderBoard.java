@@ -29,7 +29,9 @@ import com.google.cloud.dataflow.sdk.options.PipelineOptionsFactory;
 import com.google.cloud.dataflow.sdk.options.Validation;
 import com.google.cloud.dataflow.sdk.runners.DataflowPipelineRunner;
 import com.google.cloud.dataflow.sdk.transforms.DoFn;
+import com.google.cloud.dataflow.sdk.transforms.MapElements;
 import com.google.cloud.dataflow.sdk.transforms.ParDo;
+import com.google.cloud.dataflow.sdk.transforms.Sum;
 import com.google.cloud.dataflow.sdk.transforms.windowing.AfterProcessingTime;
 import com.google.cloud.dataflow.sdk.transforms.windowing.AfterWatermark;
 import com.google.cloud.dataflow.sdk.transforms.windowing.FixedWindows;
@@ -40,6 +42,7 @@ import com.google.cloud.dataflow.sdk.transforms.windowing.Window;
 import com.google.cloud.dataflow.sdk.values.KV;
 import com.google.cloud.dataflow.sdk.values.PCollection;
 
+import com.google.cloud.dataflow.sdk.values.TypeDescriptor;
 import com.mashape.unirest.http.Unirest;
 import com.mashape.unirest.request.HttpRequestWithBody;
 import org.joda.time.DateTimeZone;
@@ -212,7 +215,12 @@ public class LeaderBoard extends HourlyTeamScore {
                         .withAllowedLateness(Duration.standardMinutes(options.getAllowedLateness()))
                         .accumulatingFiredPanes())
                 // Extract and sum teamname/score pairs from the event data.
-                .apply("ExtractTeamScore", new ExtractAndSumScore("team"))
+//                .apply("ExtractTeamScore", new ExtractAndSumScore("team")
+                .apply(MapElements
+                        .via((GameActionInfo gInfo) -> KV.of(gInfo.getKey("team"), gInfo.getScore()))
+                        .withOutputType(new TypeDescriptor<KV<String, Integer>>() {
+                        }))
+                .apply(Sum.<String>integersPerKey())
                 .apply(ParDo.named("ConvertToString").of(new DoFn<KV<String, Integer>, String>() {
                     @Override
                     public void processElement(ProcessContext c) throws Exception {
